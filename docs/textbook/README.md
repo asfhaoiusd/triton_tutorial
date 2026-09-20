@@ -1,6 +1,6 @@
 # Triton 讲义
 
-编译好的 PDF：[`main.pdf`](main.pdf)。
+编译好的 PDF：[在浏览器打开](https://github.com/asfhaoiusd/triton_tutorial/raw/main/docs/textbook/main.pdf)（仓库文件 [`main.pdf`](main.pdf)）。
 
 版式对齐 Stanford CS336 assignment handout（article、10pt、蓝/橙提示框）。代码只摘仓库关键片段。
 

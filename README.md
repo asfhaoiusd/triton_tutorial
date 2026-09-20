@@ -11,7 +11,7 @@ Triton course: syntax → operators → plug your kernels into Qwen3.5-0.8B gene
 3. **推理实战**：用自己的核接进 **Qwen3.5-0.8B** 的 generate，和 eager /（可选）vLLM 比正确性与吞吐
 4. **训练对照**：Llama 式小模型上，用带反向的 Triton 核对照 eager / `torch.compile`
 
-**从 [`kernel/triton/tutorial/README.md`](kernel/triton/tutorial/README.md) 按编号走。** 中文讲义 PDF：[`docs/textbook/main.pdf`](docs/textbook/main.pdf)（[GitHub 打开](https://github.com/asfhaoiusd/triton_tutorial/blob/main/docs/textbook/main.pdf)）。源码在 [`docs/textbook/`](docs/textbook/)，本地重编：`cd docs/textbook && make`。作者学习日记：[`学习计划书.md`](kernel/triton/tutorial/学习计划书.md)。
+**从 [`kernel/triton/tutorial/README.md`](kernel/triton/tutorial/README.md) 按编号走。** 中文讲义 PDF：[在浏览器打开](https://github.com/asfhaoiusd/triton_tutorial/raw/main/docs/textbook/main.pdf)。源码在 [`docs/textbook/`](docs/textbook/)，本地重编：`cd docs/textbook && make`。作者学习日记：[`学习计划书.md`](kernel/triton/tutorial/学习计划书.md)。
 
 ```text
 LICENSE / NOTICE                 本仓库 MIT；第三方见 NOTICE

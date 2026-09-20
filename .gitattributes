@@ -1,0 +1,2 @@
+# Treat PDFs as binary so GitHub does not open them as source code.
+*.pdf binary
