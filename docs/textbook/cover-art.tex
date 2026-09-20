@@ -1,0 +1,21 @@
+% 封面横幅：ElegantBook 结构色（blue）
+\documentclass{article}
+\usepackage[paperwidth=210mm,paperheight=90mm,margin=0pt]{geometry}
+\usepackage{tikz}
+\definecolor{structurecolor}{RGB}{60,113,183}
+\pagestyle{empty}
+\begin{document}
+\offinterlineskip
+\noindent\begin{tikzpicture}
+  \clip (0,0) rectangle (\paperwidth,\paperheight);
+  \fill[structurecolor] (0,0) rectangle (\paperwidth,\paperheight);
+  \foreach \i in {0,...,12} {
+    \draw[white, opacity=0.09, line width=0.8pt]
+      (0, \i*0.72cm) -- (\paperwidth, \i*0.72cm+1.6cm);
+  }
+  \node[white, font=\sffamily\bfseries, scale=3.05]
+    at (0.5\paperwidth, 0.58\paperheight) {TRITON};
+  \node[white, font=\sffamily, scale=1.22]
+    at (0.5\paperwidth, 0.36\paperheight) {AI Infra $\cdot$ GPU Kernel};
+\end{tikzpicture}
+\end{document}

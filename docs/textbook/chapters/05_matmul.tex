@@ -1,0 +1,53 @@
+\chapter{矩阵乘}
+
+\begin{introduction}
+  \item 输出块沿 $K$ 累加
+  \item \texttt{reset\_to\_zero}
+  \item 三维一次 launch
+  \item \texttt{step90} 未收完，跳过
+\end{introduction}
+
+配套：\pyfile{kernel/triton/tutorial/03_matmul/}。先跑：\pyfile{step01_dot_1d.py} $\to$ \pyfile{step02_dot_3d.py} $\to$ \pyfile{step03_matmul_2d.py} $\to$ \pyfile{step04_matmul_3d.py}。
+
+\begin{note}
+选修 \pyfile{step90_linear_backward.py} \textbf{未收完}，初学者跳过。第~8~章 naive attention 会 import 三维 matmul。
+\end{note}
+
+\section{公式与数据流}
+
+\[
+C=A@B.
+\]
+每个 program 负责输出块 $(\texttt{BLOCK\_M},\texttt{BLOCK\_N})$，沿 $K$ 循环 \texttt{tl.dot} 累加。三维用 \texttt{pid\_b} 一次 launch，不要 Python \texttt{for b}。
+
+\figmatmul
+
+\src{kernel/triton/tutorial/03_matmul/step03_matmul_2d.py}{39}{64}{二维 matmul：输出块沿 K 累加}
+
+一维点积把多块部分和 \texttt{atomic\_add} 到标量。autotune 若对同一输出累加，必须 \texttt{reset\_to\_zero}，否则 benchmark 污染结果：
+
+\src{kernel/triton/tutorial/03_matmul/step01_dot_1d.py}{8}{35}{点积：atomic\_add 与 reset\_to\_zero}
+
+对照是 \texttt{x @ w}。三维的 $w$ \textbf{不是} \texttt{F.linear} 的布局，不要混。
+
+\section{怎么跑}
+
+\begin{runcmd}
+\begin{lstlisting}[style=shell]
+python kernel/triton/tutorial/03_matmul/step01_dot_1d.py
+python kernel/triton/tutorial/03_matmul/step03_matmul_2d.py
+python kernel/triton/tutorial/03_matmul/step04_matmul_3d.py
+\end{lstlisting}
+\end{runcmd}
+
+\section{正确性}
+
+\begin{note}
+关 \texttt{allow\_tf32} 再比。fp32 下看 max abs err，不要用带 bias 的 \texttt{F.linear} 当三维对照。
+\end{note}
+
+\section{效果}
+
+\begin{remark}
+教学核通常慢于 cuBLAS。课看的是分块数据流：哪一维 \texttt{pid} 并行、哪一维 kernel 内 \texttt{for}。后面 Flash 的 $QK^\top$ 就是反复调用这一套 \texttt{tl.dot}。
+\end{remark}

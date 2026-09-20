@@ -1,0 +1,12 @@
+# RTX 50-series (Blackwell / sm_120) needs CUDA 12.8 wheels.
+# Install with:
+#   source .venv/bin/activate
+#   uv pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cu128
+# or:
+#   bash scripts/setup_env.sh
+
+torch
+triton
+numpy
+# Part 3 可选：uv pip install -r projects/qwen35_infer/requirements-capstone.txt
+# vLLM 另装，见 projects/qwen35_infer/README.md

@@ -1,0 +1,50 @@
+\chapter*{前言}
+\phantomsection
+\addcontentsline{toc}{section}{前言}
+
+\begin{introduction}
+  \item 读者：会一点 Python / PyTorch
+  \item 不需要 CUDA C++
+  \item 用解释器跑 \texttt{.py}
+  \item 环境：WSL2 + CUDA 12.8
+  \item 算子章四块骨架
+  \item 教学核常慢于库函数
+\end{introduction}
+
+这份讲义跟着仓库走：先写 kernel，再接到 generate 和若干步训练上。读者需要会一点 Python 和 PyTorch，不需要会 CUDA C++。
+
+\section*{怎么用这本书}
+
+正文分四部分。第一部分回答「为什么是 Triton」；第二部分按课号写算子；第三、四部分把核接到推理和训练。每一章算子尽量按同一骨架写：公式与数据流、怎么跑、正确性、效果。算子优化往往要靠数据流图才能看懂：\textbf{先看图里哪一维用 pid、哪一维必须核内 for、tile 住 HBM 还是 SRAM}，再对照摘录的代码。
+
+\begin{note}
+效果一节会反复强调：教学核常常慢于 \texttt{cuBLAS} / \texttt{SDPA}。课看的是分块、融合和 launch，不是端到端赢库函数。
+\end{note}
+
+完整程序在仓库里，书中只摘关键片段。路径相对于仓库根目录，例如
+
+{\centering\pyfile{kernel/triton/tutorial/01_vector_add/step01_add_1d.py}\par}
+
+\begin{runcmd}[启动方式]
+跑示例请用解释器，不要把 \texttt{.py} 当 shell 脚本执行：
+\begin{lstlisting}[style=shell]
+cd /path/to/ai_infra
+source .venv/bin/activate
+python kernel/triton/tutorial/01_vector_add/step01_add_1d.py
+\end{lstlisting}
+\end{runcmd}
+
+\section*{环境}
+
+参考配置：RTX 5070 Laptop + WSL2。Blackwell（\texttt{sm\_120}）需要 \textbf{CUDA 12.8} 的 PyTorch 轮子。
+
+\begin{runcmd}[本仓库环境]
+\begin{lstlisting}[style=shell]
+bash scripts/setup_env.sh
+source .venv/bin/activate
+\end{lstlisting}
+\end{runcmd}
+
+\begin{remark}
+Windows 原生对 Triton 支持很弱，建议 Linux 或 WSL2。本机 \texttt{torch.profiler} 常常采不到 GPU，看 launch 用第~9~章的 \texttt{nsys}。作者进度板 \pyfile{kernel/triton/tutorial/学习计划书.md} 不是教材，附录只提炼其中仍然有效的坑。
+\end{remark}

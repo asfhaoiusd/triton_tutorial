@@ -1,0 +1,47 @@
+\chapter{向量加法}
+
+\begin{introduction}
+  \item 一维 \texttt{mask}
+  \item 二维 / 三维 stride
+  \item 带宽绑定
+  \item 文件：\texttt{01\_vector\_add/}
+\end{introduction}
+
+配套：\pyfile{kernel/triton/tutorial/01_vector_add/}。先跑：\pyfile{step01_add_1d.py} $\to$ \pyfile{step02_add_2d.py} $\to$ \pyfile{step03_add_3d.py}。
+
+\section{公式与数据流}
+
+\[
+\mathrm{out}=x+y.
+\]
+每个 program 处理一块 \texttt{BLOCK} 元素；越界用 \texttt{mask}。二维、三维不要假设内存连续，用各自的 stride。二维 kernel 把 \texttt{pid} 拆成行块和列块：
+
+\figtiletwo
+
+\figbandwidth
+
+\src{kernel/triton/tutorial/01_vector_add/step02_add_2d.py}{33}{47}{二维加法：stride 与二维 mask}
+
+三维同理，再加一个 \texttt{pid} 轴。这是 launch 套路的操练场，不是算力测试。
+
+\section{怎么跑}
+
+\begin{runcmd}
+\begin{lstlisting}[style=shell]
+python kernel/triton/tutorial/01_vector_add/step01_add_1d.py
+python kernel/triton/tutorial/01_vector_add/step02_add_2d.py
+python kernel/triton/tutorial/01_vector_add/step03_add_3d.py
+\end{lstlisting}
+\end{runcmd}
+
+\section{正确性}
+
+\begin{note}
+对照 \texttt{x + y}。elementwise 应对齐到 \texttt{atol} $10^{-5}$ 量级。
+\end{note}
+
+\section{效果}
+
+\begin{remark}
+这是\textbf{带宽绑定}：算的是一次加法，时间看 load/store。autotune 主要扫 \texttt{BLOCK} / \texttt{num\_warps}。不要拿它和 cuBLAS 比。
+\end{remark}

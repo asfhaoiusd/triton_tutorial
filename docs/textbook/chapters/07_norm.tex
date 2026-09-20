@@ -1,0 +1,55 @@
+\chapter{LayerNorm 与 RMSNorm}
+
+\begin{introduction}
+  \item LN vs RMS
+  \item 行统计量
+  \item $\mathrm{d}\gamma/\mathrm{d}\beta$ 用 \texttt{atomic\_add}
+  \item 推理 API 是 \texttt{rmsnorm}
+\end{introduction}
+
+配套：\pyfile{kernel/triton/tutorial/05_norm/}。先跑：\pyfile{step01_layernorm.py} $\to$ \pyfile{step02_online_layernorm.py} $\to$ \pyfile{step03_rmsnorm.py}。推理 Host API 是 \texttt{from step03\_rmsnorm import rmsnorm}。LN 反向写在 step01 同文件。
+
+\section{公式与数据流}
+
+LayerNorm（最后一维 $N$）：
+\[
+\hat x=\frac{x-\mu}{\sqrt{\sigma^2+\varepsilon}},\qquad
+y=\gamma\odot\hat x+\beta.
+\]
+RMSNorm 没有减均值、没有 $\beta$：
+\[
+\mathrm{rms}=\sqrt{\mathrm{mean}(x^2)+\varepsilon},\qquad
+y=w\odot x/\mathrm{rms}.
+\]
+
+Naive LN 把整行 $N$ 一次装下。$N$ 很大时会炸寄存器；online 沿 $N$ 分块累加 $\sum x$、$\sum x^2$。
+
+\fignorm
+
+\src{kernel/triton/tutorial/05_norm/step01_layernorm.py}{69}{81}{LayerNorm 前向：行均值、方差、仿射}
+
+反向里 $\mathrm{d}x$ 每行本地可写；$\mathrm{d}\gamma,\mathrm{d}\beta$ 形状是 $(N,)$，要把所有行加在一起。本块先 \texttt{sum(axis=0)}，再 \texttt{atomic\_add} 到全局。autotune 必须 \texttt{reset\_to\_zero}。
+
+\src{kernel/triton/tutorial/05_norm/step01_layernorm.py}{223}{227}{参数梯度：tile 内求和再原子加}
+
+\section{怎么跑}
+
+\begin{runcmd}
+\begin{lstlisting}[style=shell]
+python kernel/triton/tutorial/05_norm/step01_layernorm.py
+python kernel/triton/tutorial/05_norm/step02_online_layernorm.py
+python kernel/triton/tutorial/05_norm/step03_rmsnorm.py
+\end{lstlisting}
+\end{runcmd}
+
+\section{正确性}
+
+\begin{note}
+LN 对 \texttt{F.layer\_norm}。RMS 对 \texttt{F.rms\_norm}。fp32，$\mathrm{rtol}$ 约 $10^{-4}$。训练必须 \texttt{TritonLayerNorm.apply}，不能对裸 \texttt{layernorm(...)} 求 \texttt{grad}。
+\end{note}
+
+\section{效果}
+
+\begin{remark}
+大 $N$ 时分块版接近 torch，是因为 naive 整行会炸寄存器，不是因为公式更快。教学 LN 大 hidden 仍打不过 \texttt{F.layer\_norm}（背后是 cuDNN），训练默认不换它。
+\end{remark}

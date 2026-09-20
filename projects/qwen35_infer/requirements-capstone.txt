@@ -1,0 +1,6 @@
+# Part 3 可选依赖（不要和根目录 cu128 torch 混装错 index）
+# uv pip install -r projects/qwen35_infer/requirements-capstone.txt
+transformers>=5.0.0
+accelerate
+# vllm 可选：体积大，WSL + Blackwell 可能装不上。装好后：
+#   python projects/qwen35_infer/bench.py --backend-list vllm --model Qwen/Qwen3.5-0.8B

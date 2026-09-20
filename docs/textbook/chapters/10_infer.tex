@@ -1,0 +1,55 @@
+\chapter{推理实战：接到 Qwen3.5}
+
+\begin{introduction}
+  \item 0.8B 混合架构
+  \item 只换 RMS / SwiGLU / GQA
+  \item 裸 kernel，无计算图
+  \item 和 vLLM 比的是调度
+\end{introduction}
+
+配套：\pyfile{projects/qwen35_infer/}。一条 \textbf{generate}：prefill 整段 prompt，decode 时维护 KV。不要在这里写迷你 vLLM。
+
+\section{公式与数据流}
+
+\texttt{Qwen/Qwen3.5-0.8B} 不是纯 Transformer：24 层大致是 $6\times\bigl(3\times(\text{Gated DeltaNet}\to\mathrm{FFN}) + 1\times(\text{Gated Attention}\to\mathrm{FFN})\bigr)$，大约 18 层线性注意力 + 6 层 softmax 注意力（GQA，$8$ 个 Q 头 / $2$ 个 KV 头，$\mathrm{head\_dim}=256$）。第一版 \textbf{DeltaNet 仍用 PyTorch}（玩具模型里用一层 Linear 占位）。
+
+本课只换三处前向：
+
+\begin{itemize}
+  \item RMSNorm：\texttt{rmsnorm}
+  \item SwiGLU MLP：\texttt{swiglu\_pro} 再 \texttt{@ W\_down}
+  \item GQA Flash：\texttt{flash\_attention\_gqa}，RoPE 用 \texttt{apply\_rope\_offset}
+\end{itemize}
+
+\src{projects/qwen35_infer/kernels.py}{14}{20}{推理侧把课上的前向 API 串起来}
+
+\begin{proposition}{没有图}
+这些是\textbf{裸 Triton 前向}，没有 autograd 图，不能拿去训练。8GB 不要一上来 bf16 4B/9B；0.8B 短上下文够用。官方 256K 上下文本课不跑。
+\end{proposition}
+
+\section{怎么跑}
+
+基础环境见仓库根 README。本目录额外可装 \texttt{transformers}；vLLM 体积大，WSL 上可能难装，不是验收必选项。
+
+\begin{runcmd}
+\begin{lstlisting}[style=shell]
+python projects/qwen35_infer/smoke_test.py
+python projects/qwen35_infer/generate.py --backend toy --kernels eager
+python projects/qwen35_infer/generate.py --backend toy --kernels triton
+python projects/qwen35_infer/bench.py --backend-list toy_eager,toy_triton
+\end{lstlisting}
+\end{runcmd}
+
+有权重时再加 HuggingFace / vLLM 对照，短上下文（256--1024）。
+
+\section{正确性}
+
+\begin{note}
+同一权重、同一组短 prompt、greedy、相同 \texttt{max\_new\_tokens}。先看文本 / token 是否一致，再看 TTFT、decode tok/s、峰值显存。玩具模型不下载权重也能做核对齐。
+\end{note}
+
+\section{效果}
+
+\begin{remark}
+vLLM 通常更快，因为 PagedAttention、continuous batching、CUDA Graph 和调度，不是某一个 Softmax 核。课的结论应是：换核后这一层相对 eager 快了多少，端到端还慢在哪。
+\end{remark}

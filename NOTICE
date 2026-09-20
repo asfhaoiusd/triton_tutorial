@@ -1,0 +1,14 @@
+Third-party material
+====================
+
+Triton-Puzzles
+  Location : kernel/triton/Triton-Puzzles/  (vendored snapshot; not a nested git repo)
+  Upstream : https://github.com/gpu-mode/Triton-Puzzles
+  License  : Apache License 2.0  (see that directory's LICENSE)
+
+FlashAttention-2 figures (docs/textbook, when present)
+  Dao, Tri. FlashAttention-2: Faster Attention with Better Parallelism
+  and Work Partitioning. ICLR 2024.
+  https://arxiv.org/abs/2307.08691
+  Used for teaching comparison with the kernels in this repo.
+  Do not vendor the full paper PDF; link arXiv instead.

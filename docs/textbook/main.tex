@@ -1,0 +1,35 @@
+\documentclass[10pt,fontset=fandol]{ctexart}
+
+\input{preamble}
+
+\begin{document}
+
+\begin{center}
+  {\LARGE\bfseries 用 Triton 写 GPU 算子}\\[0.45em]
+  {\large 从 AI Infra 到训练对照}\\[0.85em]
+  Version 0.1\\[0.15em]
+  ai\_infra\\[0.15em]
+  2026 年 9 月
+\end{center}
+\vspace{0.4em}
+
+\tableofcontents
+\vspace{0.8em}
+
+\input{chapters/00_preface}
+\input{chapters/01_ai_infra}
+\input{chapters/02_syntax}
+\input{chapters/03_vector_add}
+\input{chapters/04_activations}
+\input{chapters/05_matmul}
+\input{chapters/06_softmax}
+\input{chapters/07_norm}
+\input{chapters/08_attention}
+\input{chapters/09_nsys}
+\input{chapters/10_infer}
+\input{chapters/11_train}
+
+\appendix
+\input{chapters/90_appendix}
+
+\end{document}

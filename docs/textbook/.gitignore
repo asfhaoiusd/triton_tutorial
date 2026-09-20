@@ -1,0 +1,21 @@
+# 编译产物（本目录相对路径）
+*.aux
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.xdv
+*.bbl
+*.blg
+*.run.xml
+*.bcf
+*.pdf
+elegantbook.cls
+bbding.sty
+Uding.fd
+bbding10.mf
+bbding10.*

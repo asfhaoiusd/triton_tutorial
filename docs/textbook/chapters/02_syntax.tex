@@ -1,0 +1,87 @@
+\chapter{Triton 语法}
+
+\begin{introduction}
+  \item program / \texttt{pid} / \texttt{BLOCK} / \texttt{mask}
+  \item 最小 \texttt{add\_kernel}
+  \item stride 与二维广播
+  \item \texttt{tl.dot}、归约、\texttt{atomic\_add}
+  \item 常见坑
+\end{introduction}
+
+Triton 用类 Python 语法写 GPU kernel。第~1~章已经把 program 对上 CUDA block：你不写「第 $t$ 号线程处理一个元素」，而是：
+
+\begin{proposition}{一块数据一份 program}
+每个 \textbf{program}（$\approx$ 一个 CUDA block，落到一个 SM）一次处理一整块数据（\texttt{BLOCK\_SIZE} 个元素）。块内的 thread / warp 由编译器摊，\texttt{num\_warps} 只是提示。
+\end{proposition}
+
+\section{心智模型}
+
+\begin{table}[htbp]
+  \centering
+  \caption{四个天天出现的词}
+  \begin{tabular}{ll}
+    \toprule
+    概念 & 含义 \\
+    \midrule
+    program / \texttt{pid} & 并行执行的一份 kernel 实例，\texttt{tl.program\_id} 区分 \\
+    \texttt{BLOCK\_SIZE} & 每个 program 一次处理多少元素，通常是 2 的幂 \\
+    pointer + offset & 指针算术定位，再 \texttt{tl.load} / \texttt{tl.store} \\
+    \texttt{mask} & 长度不是块整数倍时，多余位置不读不写 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+数据被切成多块，每个 \texttt{pid} 负责一块：
+
+\figpidone
+
+\section{最小完整程序}
+
+套路只有四步：\texttt{pid}+\texttt{BLOCK} 得到 \texttt{offsets}；\texttt{mask}；load $\to$ 算 $\to$ store；Host 算 \texttt{grid} 并启动。仓库里可跑的版本如下（已挂 autotune，Host 不再传 \texttt{BLOCK\_SIZE}）。
+
+\src{kernel/triton/tutorial/01_vector_add/step01_add_1d.py}{21}{48}{向量加法：kernel 与 Host 启动}
+
+\begin{note}
+\texttt{kernel[grid](...)} 按 grid 启动。\texttt{triton.cdiv(n, B)} 是向上取整。有 \texttt{@triton.autotune} 时不要再手传 \texttt{BLOCK\_*}，\texttt{grid} 用 \texttt{lambda meta}。
+\end{note}
+
+\section{Kernel 里能写什么}
+
+\begin{itemize}
+  \item \texttt{@triton.jit} 编译成 GPU kernel。里面只能用 \texttt{tl.*} 和受限 Python 子集，\textbf{不能}调 NumPy / PyTorch。
+  \item 指针由 CUDA tensor 传入；长度等运行时标量每次可改；\texttt{BLOCK\_SIZE: tl.constexpr} 影响代码生成。
+  \item 向量级选择用 \texttt{tl.where}，不要对每个元素写 Python \texttt{if}。编译期循环可用 \texttt{tl.static\_range}；Triton 里\textbf{没有} \texttt{break}。
+\end{itemize}
+
+二维 tile 的索引几乎总是广播：
+
+\begin{lstlisting}[style=pythoncode, numbers=none]
+offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+offs  = offs_m[:, None] * stride_m + offs_n[None, :] * stride_n
+mask  = (offs_m[:, None] < M) & (offs_n[None, :] < N)
+\end{lstlisting}
+
+\texttt{stride} 是「逻辑维 $+1$ 时内存跳几格」。地址 $=\mathrm{base}+\sum \mathrm{offs}_i\cdot\mathrm{stride}_i$。不要假设矩阵一定连续。
+
+\figtiletwo
+
+\section{常用原语}
+
+累加器常用 FP32，即使输入是 BF16。矩阵乘的核心是 \texttt{tl.dot}。归约是 \texttt{tl.sum} / \texttt{tl.max}（Softmax、Norm、Attention 都会用）。多 program 往同一地址加，才用 \texttt{tl.atomic\_add}，并且 autotune 必须 \texttt{reset\_to\_zero}。
+
+Host 侧计时用 \texttt{triton.testing.do\_bench}；对照前先 \texttt{torch.cuda.synchronize}，GEMM 对照请关掉 TF32。
+
+\section{常见坑}
+
+\begin{enumerate}
+  \item 忘了 \texttt{mask}：越界读写。
+  \item CPU tensor：必须 \texttt{device="cuda"}。
+  \item 在 kernel 里用 PyTorch。
+  \item FP16 累加不稳：归约用 FP32。
+  \item 把 Python 动态 \texttt{list} 搬进 kernel。
+\end{enumerate}
+
+\begin{exercise}[建议顺序]
+先向量加减 / ReLU，再行 Softmax，再小 matmul，再 fused bias+activation。官方教程：\url{https://triton-lang.org/main/getting-started/tutorials/index.html}。
+\end{exercise}

@@ -1,0 +1,58 @@
+\chapter{激活：ReLU 与 SwiGLU}
+
+\begin{introduction}
+  \item ReLU 前向 / 反向
+  \item 浅 SwiGLU：HBM 上的 $a,b$
+  \item 深融合：两次 \texttt{tl.dot}
+  \item 反向重算 + cuBLAS GEMM
+\end{introduction}
+
+配套：\pyfile{kernel/triton/tutorial/02_activations/}。先跑：\pyfile{step01_relu.py} $\to$ \pyfile{step02_swiglu.py} $\to$ \pyfile{step03_swiglu_fused.py}。ReLU 只需第~2~章；深融合 SwiGLU 建议先扫一眼第~5~章 matmul（两次 \texttt{tl.dot}）。
+
+\section{公式与数据流}
+
+ReLU：
+\[
+y=\max(x,0),\qquad \mathrm{d}x=\mathrm{d}y\cdot\mathbf{1}_{x>0}.
+\]
+\texttt{tl.where(x > 0, x, 0.0)} 即可。反向在同文件 \texttt{TritonReLU}。
+
+SwiGLU：
+\[
+\mathrm{out}=\mathrm{SiLU}(xW_1)\odot(xW_2),\qquad \mathrm{SiLU}(a)=a\cdot\sigma(a).
+\]
+
+\begin{itemize}
+  \item \textbf{浅}（\pyfile{step02_swiglu.py}）：Host 上做两次 GEMM，kernel 只做 \texttt{silu(a)*b}，中间 $a,b$ 写 HBM。
+  \item \textbf{深}（\pyfile{step03_swiglu_fused.py}）：同一 kernel 沿 $K$ 做两次 \texttt{tl.dot}，SiLU 与逐元乘之后写回，不物化 $a,b$。
+\end{itemize}
+
+\figswiglu
+
+\src{kernel/triton/tutorial/02_activations/step03_swiglu_fused.py}{80}{114}{融合 SwiGLU：沿 K 两次 dot，再 SiLU 与乘}
+
+\begin{proposition}{TritonSwiGLU 的反向}
+正向是融合核；反向重算 $a,b$ 后，$\mathrm{d}W$ 仍走 PyTorch GEMM。这是教学接法，不是再写一个 TritonLinear。
+\end{proposition}
+
+\section{怎么跑}
+
+\begin{runcmd}
+\begin{lstlisting}[style=shell]
+python kernel/triton/tutorial/02_activations/step01_relu.py
+python kernel/triton/tutorial/02_activations/step02_swiglu.py
+python kernel/triton/tutorial/02_activations/step03_swiglu_fused.py
+\end{lstlisting}
+\end{runcmd}
+
+\section{正确性}
+
+\begin{note}
+ReLU / \texttt{TritonReLU} 对 \texttt{F.relu} 与 \texttt{autograd.grad}。SwiGLU 对 \texttt{silu(x@W1)*(x@W2)}；fp32 建议关 TF32，$\mathrm{rtol}=10^{-3}$。\texttt{TritonSwiGLU} 的 $\mathrm{d}x,\mathrm{d}W_1,\mathrm{d}W_2$ 对同一公式的 \texttt{autograd.grad}。
+\end{note}
+
+\section{效果}
+
+\begin{remark}
+深融合快在少两次中间 GEMM 的 HBM 往返。用 \texttt{do\_bench} 看 step02 vs step03。大矩阵上教学融合仍可能慢于 cuBLAS 两次 GEMM 再 elementwise——第~11~章训练默认因此不换 SwiGLU。
+\end{remark}

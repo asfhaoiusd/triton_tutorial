@@ -1,0 +1,182 @@
+% CS336 assignment 讲义版式：letter + CM + 蓝/橙框
+\newcommand{\reporoot}{../..}
+
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,bm}
+\usepackage[letterpaper,margin=1in]{geometry}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{caption}
+\captionsetup{font=small, labelfont=bf, skip=4pt}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{setspace}
+\usepackage[most]{tcolorbox}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+
+\definecolor{csblue}{RGB}{0,112,192}
+\definecolor{csorange}{RGB}{230,126,34}
+\definecolor{csteal}{RGB}{0,128,128}
+\definecolor{csstring}{RGB}{46,139,87}
+\colorlet{structurecolor}{csblue}
+\colorlet{second}{csorange}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=red!70!black,
+  urlcolor=csblue,
+  citecolor=red!70!black,
+  breaklinks=true,
+  linktoc=all,
+}
+\setcounter{tocdepth}{2}
+
+\IfFontExistsTF{DejaVu Sans Mono}{
+  \setmonofont{DejaVu Sans Mono}[Scale=0.88]
+}{}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55em}
+\setstretch{1.12}
+\setlist{nosep, leftmargin=1.35em, itemsep=0.2em, topsep=0.35em}
+\setlist[enumerate,1]{label=\arabic*.}
+\setlist[itemize,1]{label=\textbullet}
+
+\titleformat{\section}{\large\bfseries}{\thesection}{0.55em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{0.45em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{0.4em}{}
+\titlespacing*{\section}{0pt}{1.35em}{0.4em}
+\titlespacing*{\subsection}{0pt}{1.05em}{0.3em}
+\titlespacing*{\subsubsection}{0pt}{0.85em}{0.25em}
+
+\pagestyle{plain}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0pt}
+\cfoot{\thepage}
+
+% 蓝框 = CS336 Low-Resource Tip；橙框 = Problem
+\newcommand{\csboxline}{%
+  \par\vspace{3pt}%
+  \noindent{\color{black}\rule{\linewidth}{0.45pt}}\par
+  \vspace{6pt}%
+}
+\newtcolorbox{csframe}[1]{
+  colback=white,
+  colframe=#1,
+  boxrule=0.7pt,
+  sharp corners,
+  left=8pt, right=8pt, top=6pt, bottom=7pt,
+  before skip=10pt, after skip=10pt,
+}
+\newenvironment{tipbox}[1]{%
+  \begin{csframe}{csblue}%
+  \noindent\textbf{#1}\csboxline
+}{\end{csframe}}
+\newenvironment{problembox}[1]{%
+  \begin{csframe}{csorange}%
+  \noindent\textbf{#1}\csboxline
+}{\end{csframe}}
+
+% 旧章命令映射到 article 节（正文仍写 \chapter / \section）
+\let\textbooksection\section
+\let\textbooksubsection\subsection
+\NewDocumentCommand{\chapter}{s m}{%
+  \IfBooleanTF{#1}{\textbooksection*{#2}}{\textbooksection{#2}}%
+}
+\RenewDocumentCommand{\section}{s m}{%
+  \IfBooleanTF{#1}{\textbooksubsection*{#2}}{\textbooksubsection{#2}}%
+}
+\renewcommand{\subsection}{\subsubsection}
+\renewcommand{\part}[1]{}
+\providecommand{\frontmatter}{}
+\providecommand{\mainmatter}{}
+\renewcommand{\maketitle}{}
+
+\newenvironment{introduction}{%
+  \par\noindent\textbf{本讲要点}%
+  \begin{itemize}%
+}{\end{itemize}}
+\newenvironment{note}{\begin{tipbox}{Note}}{\end{tipbox}}
+\newenvironment{remark}{\begin{tipbox}{Remark}}{\end{tipbox}}
+\newenvironment{conclusion}{\begin{tipbox}{Conclusion}}{\end{tipbox}}
+\newenvironment{proposition}[1]{\begin{tipbox}{#1}}{\end{tipbox}}
+\newenvironment{definition}[1]{\begin{tipbox}{#1}}{\end{tipbox}}
+\newenvironment{runcmd}[1][怎么跑]{\begin{tipbox}{#1}}{\end{tipbox}}
+\newenvironment{exercise}[1][]{\begin{problembox}{Problem#1}}{\end{problembox}}
+\newenvironment{problemset}[1][]{%
+  \begin{problembox}{#1}%
+  \begin{enumerate}[label=(\alph*)]%
+}{%
+  \end{enumerate}%
+  \end{problembox}%
+}
+
+\renewcommand{\arraystretch}{1.15}
+
+\lstdefinestyle{pythoncode}{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{csteal},
+  commentstyle=\color{black!45},
+  stringstyle=\color{csstring},
+  showstringspaces=false,
+  breaklines=true,
+  frame=none,
+  numbers=none,
+  tabsize=4,
+  captionpos=b,
+  columns=flexible,
+  keepspaces=true,
+  showlines=false,
+  xleftmargin=0.6em,
+}
+\lstdefinestyle{shell}{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{csteal},
+  commentstyle=\color{black!45},
+  stringstyle=\color{csstring},
+  breaklines=true,
+  frame=none,
+  numbers=none,
+  columns=flexible,
+  keepspaces=true,
+  xleftmargin=0.6em,
+}
+\lstset{style=pythoncode}
+
+\newcommand{\src}[4]{%
+  \lstinputlisting[
+    style=pythoncode,
+    firstline=#2,
+    lastline=#3,
+    caption={#4},
+  ]{\reporoot/#1}%
+  \par\vspace{-0.3em}\noindent{\small 文件：\texttt{\detokenize{#1}:#2--#3}}%
+}
+
+\newcommand{\run}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\pyfile}[1]{\texttt{\detokenize{#1}}}
+\providecommand{\kaishu}{}
+
+\tikzset{
+  opbox/.style={draw=csblue, thick, fill=csblue!8, inner sep=4pt, font=\small, align=center},
+  sram/.style={draw=csorange, thick, fill=csorange!12, inner sep=4pt, font=\small, align=center},
+  hbm/.style={draw=black!45, thick, fill=black!4, inner sep=4pt, font=\small, align=center},
+  arr/.style={-Latex, csblue, thick},
+  arrd/.style={-Latex, csorange, thick},
+}
+\newcommand{\fignote}[1]{\par\vspace{3pt}{\centering\small #1\par}\vspace{4pt}}
+\graphicspath{{figures/}}
+\newcommand{\facite}{Dao. \emph{FlashAttention-2: Faster Attention with Better Parallelism and Work Partitioning}. ICLR 2024}
+\newcommand{\faurl}{https://arxiv.org/abs/2307.08691}
+\newcommand{\paperfig}[3]{%
+\begin{center}
+\includegraphics[width=#2\linewidth]{#1}%
+\fignote{#3}
+\end{center}}
+\input{figures}

@@ -1,0 +1,74 @@
+\chapter{训练对照：Function 与三后端}
+
+\begin{introduction}
+  \item 必须 \texttt{Function.apply}
+  \item 默认只换 FA
+  \item Adam 不被 autocast 减掉
+  \item \texttt{compile} 常赢端到端
+\end{introduction}
+
+配套：\pyfile{projects/llm_train/}。架构是 \textbf{LayerNorm + RoPE + GQA + SwiGLU}（训练骨架用 LN，不是 RMSNorm），不是 Qwen3.5 的 DeltaNet。只跑若干 step：看 step 时间、tok/s、峰值显存、loss 是否同量级，不训到可用 chatbot。
+
+\section{公式与数据流}
+
+推理可以调裸前向；训练必须 \texttt{torch.autograd.Function}。\texttt{Function.apply} 才建图，自己调 \texttt{forward} 不会进 \texttt{backward}。\texttt{save\_for\_backward} 只存反向真正用到的量：Softmax 存 $y$ 不存 $x$；Flash 存 $Q,K,V,O,\mathrm{LSE}$，不能存完整 $P$。
+
+默认 \texttt{--triton-ops fa}：只换 FlashAttention，LN 与 MLP 仍走 PyTorch / cuBLAS。
+
+\figtrainops
+
+\begin{lstlisting}[style=shell]
+hidden -> F.layer_norm -> FA Function (GROUP) -> residual
+       -> F.layer_norm -> silu(x@Wg)*(x@Wu) + Linear down -> residual
+\end{lstlisting}
+
+教学对照再开 \texttt{--triton-ops fa,ln,swiglu}。MLP 的 down 始终 \texttt{nn.Linear}。教学大 GEMM 打不过 cuBLAS，开了会负优化。
+
+\src{projects/llm_train/kernels.py}{31}{54}{训练默认只换 FA；LN / SwiGLU 需显式打开}
+
+\subsection{显存账}
+
+\begin{proposition}{Adam 不在 autocast 里}
+混合精度（\texttt{autocast} bf16）\textbf{减的是激活和 matmul，不是 Adam 状态}。约 1B 参数全参 AdamW：权重 bf16 约 2~GB，Adam $m/v$ 常仍是 fp32 约 8~GB，再加梯度与激活。\textbf{8GB 笔记本全参 1B 会 OOM}。默认 \texttt{--config small}（约 0.25B，$\mathrm{seq}=256$）；\texttt{1b} 失败时看脚本打印的账即可，不算课程失败。
+\end{proposition}
+
+\section{怎么跑}
+
+\begin{runcmd}
+\begin{lstlisting}[style=shell]
+python projects/llm_train/train.py --config small --backend eager --steps 5
+python projects/llm_train/speed.py --config small --steps 20
+python projects/llm_train/bench.py --config small --steps 10
+\end{lstlisting}
+\end{runcmd}
+
+Triton tile 在 \pyfile{projects/llm_train/tiles.py}，或命令行 \texttt{--fa-block-m} 等覆盖。显式 launch 必须带 \texttt{num\_stages}，否则 JIT 默认 3 级流水会把 smem 乘过本机上限。FA 反向不要上 $64\times 64$。
+
+\section{正确性}
+
+\begin{note}
+loss 同量级即可，不要求 bit 级一致。裸 kernel 没有 \texttt{grad\_fn}；autocast 下 $QKV$ 常是 bf16、交叉熵回传的 $\mathrm{d}O$ 常是 fp32，\texttt{tl.dot} 要求两侧同 dtype，加速 FA 会把 $\mathrm{d}O$ cast 到 $Q$ 的 dtype。
+\end{note}
+
+\section{效果}
+
+三后端：
+
+\begin{table}[htbp]
+  \centering
+  \caption{训练对照里实际在跑什么}
+  \begin{tabular}{ll}
+    \toprule
+    后端 & 实现 \\
+    \midrule
+    \texttt{eager} & \texttt{F.layer\_norm} + SDPA(\texttt{enable\_gqa}) + silu GEMM \\
+    \texttt{compile} & 同一套 eager + \texttt{torch.compile} \\
+    \texttt{triton}（默认 \texttt{fa}） & 只换 FA；LN / MLP 仍 cuBLAS \\
+    \texttt{fa,ln,swiglu} & 再换教学 LN / 融合 SwiGLU \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{conclusion}
+\texttt{compile} 常赢端到端。Triton 默认只比 FA 对 SDPA；不要用教学 Linear 去和 cuBLAS 比整步时间。数字以你机器 \texttt{speed.py} 为准。
+\end{conclusion}

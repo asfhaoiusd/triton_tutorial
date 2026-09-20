@@ -1,0 +1,135 @@
+\chapter{注意力：从 Naive 到 Flash}
+
+\begin{introduction}
+  \item Naive / MHA 是 Host 串
+  \item 单头 Flash：论文双循环
+  \item 教学多头 causal：\texttt{grid=(B,H)}
+  \item 加速版：Q 块并行与 GQA
+  \item RoPE / GQA / MLA
+\end{introduction}
+
+配套：\pyfile{kernel/triton/tutorial/06_attention/}。先跑：naive $\to$ MHA $\to$ 单头 Flash $\to$ \textbf{教学多头 causal} $\to$ RoPE $\to$ GQA。加速版 \pyfile{step04_flash_causal_mha.py} 给训练用；对照课请先读教学版。MLA 选修。Qwen3.5 的 DeltaNet 本课不实现。
+
+\section{Naive 与多头：Host 串起来不算融合}
+
+单头：
+\[
+S=\frac{QK^\top}{\sqrt{d}},\quad
+P=\mathrm{softmax}(S),\quad
+O=PV.
+\]
+$S,P$ 是 $(S,S)$，写进 HBM。多头把 $(B,H,S,d)$ 展成 $(BH,S,d)$ 再调三维 matmul。这是 Host 上多次 launch，\textbf{不是} kernel 融合。
+
+\fignaiveattn
+
+\begin{proposition}{对照}
+对照用 \texttt{F.scaled\_dot\_product\_attention}（\texttt{is\_causal=True}）。不要用带投影的 \texttt{multi\_head\_attention\_forward}。SDPA 会选后端，不等于「一次 Flash」。
+\end{proposition}
+
+\section{单头 Flash：论文双循环}
+
+数据流以 FlashAttention-2 论文为准（\facite；\url{\faurl}）。要点：外层 $Q$ 行块、内层 $K/V$ 列块，片上维护 $(m,\ell,\mathrm{acc})$，不把 $S/P$ 写回 HBM。外层可以映射成 \texttt{program\_id}，内层\textbf{必须} \texttt{for}——online 统计量不能按列拆成不同 program。
+
+论文 Fig.~1 把「切 $K/V$、片上 softmax、用 $\ell$ 重标定 $O$」画在一张图里。蓝实线框在 HBM，橙虚线框在 SRAM（不物化）：
+
+\paperfig{fa2-fig1-tiling.png}{0.98}{论文 Fig.~1：\facite。$K,V$ 切成两块时，先算 $(S^{(1)},A^{(1)},O^{(1)})$，再与第二块用 $\ell$ 重标定得到正确的 $O$。}
+
+课上把同一件事收成「谁是 pid、谁必须核内 for」：
+
+\figflashloop
+
+论文 Algorithm~1 就是这层双循环。外 $i$ 扫 $Q$ 块（我们的 \texttt{BLOCK\_M}），内 $j$ 扫 $K/V$ 块（\texttt{BLOCK\_N}），片上更新 $m_i,\ell_i,O_i$，最后写 $O_i$ 和 $\mathrm{LSE}_i=m_i+\log\ell_i$：
+
+\paperfig{fa2-alg1-forward.png}{0.96}{论文 Algorithm~1：FlashAttention-2 前向。教学单头把两层 \texttt{for} 都留在核里，方便一行行对照。}
+
+教学单头 \texttt{grid=(B,)}，双重 \texttt{for} 都在核内：
+
+\src{kernel/triton/tutorial/06_attention/step03_flash_single.py}{83}{114}{单头 Flash：外 Q 内 KV}
+
+\begin{proposition}{shared memory}
+Head dim $D$ 保持 64/128。把 hidden$=512$ 当一头会让 $(\texttt{BLOCK\_M},D)$ 爆 shared memory。本机 smem 上限大约 $101376$ 字节；教学核把整段 $D$ 放进 SRAM，$D=512$ 会跑不了。
+\end{proposition}
+
+\section{教学多头 causal}
+
+文件：\pyfile{step04_flash_causal_mha_teach.py}。\\
+\texttt{grid=(B,H)}，一个 program 一个头，内部仍是论文双循环。Causal 打在 \texttt{qk} 上：\texttt{offs\_n <= offs\_m} 才保留，否则 $-\infty$。这不是 \texttt{tl.load} 的越界 mask；$K/V$ 块里常常同时含过去和未来。
+
+\figcausal
+
+正向必须写下
+\[
+\mathrm{LSE}_i=m_i+\log \ell_i,
+\]
+形状 $(B,H,S)$，反向用 $\mathrm{P}_{ij}=\exp(S_{ij}-\mathrm{LSE}_i)$ 重算，不能存完整 $P$。
+
+反向教学布局：\textbf{外层 KV 列块}（本地攒 $\mathrm{d}K/\mathrm{d}V$），\textbf{内层 Q 行块}（$\mathrm{d}Q$ 用 \texttt{atomic\_add}）。因此 Host 上 \texttt{dQ} 必须 \texttt{zeros\_like}，不能 \texttt{empty}。这就是论文 Fig.~2 右边：每个 worker 负责注意力矩阵的一列块。
+
+\src{kernel/triton/tutorial/06_attention/step04_flash_causal_mha_teach.py}{70}{91}{教学 FA：grid 是 (B,H)，外层 for 扫 Q 块}
+
+\begin{note}
+数值对照必须走 \texttt{TritonFlashAttentionCausalMHA.apply}，不能对裸 Triton 的 $O$ 求 \texttt{grad}。一次 \texttt{grad(o,(q,k,v),do)} 求出三个梯度。
+\end{note}
+
+\section{加速版：训练在用的核}
+
+文件：\pyfile{step04_flash_causal_mha.py}。相对教学版，核心是把论文 Fig.~2 的并行做进去：前向每个 worker 一行块（一块 $Q$），反向每个 worker 一列块（一块 $K/V$，$dQ$ 原子加）。
+
+\paperfig{fa2-fig2-parallel.png}{0.82}{论文 Fig.~2：\facite。左：前向按行块并行（加速版的 Q 块 pid）。右：反向按列块并行（教学反向的 KV 外层）。}
+
+\figfagrid
+
+\begin{enumerate}
+  \item \textbf{Q 块并行}：\texttt{grid=(cdiv(S, BLOCK\_M), B, H)}，每个 program 一块 $Q$。
+  \item \textbf{GQA}：\texttt{GROUP=H\_q/H\_{kv}}，\texttt{pid\_hkv = pid\_h // GROUP}，不再 \texttt{repeat\_interleave} KV。
+  \item Causal 用循环上界收掉未来 KV 块（Triton 不能 \texttt{break}）。
+  \item 反向改成 Q 并行：本地写 $\mathrm{d}Q$，对 $\mathrm{d}K/\mathrm{d}V$ \texttt{atomic\_add}（fp32 累加）。
+\end{enumerate}
+
+论文 Fig.~3 是\textbf{同一个 thread block 里} warp 怎么切。FlashAttention 切 $K/V$（split-K，中间结果要进 shared memory 再加）；FlashAttention-2 改切 $Q$，各 warp 自己写出对应的 $O$ 片，少一次 smem 同步。Triton 的 \texttt{tl.dot} 不让你直接排 warp，但这解释了官方 FA2 为什么比 FA1 快。
+
+\begin{center}
+\begin{tabular}{@{}cc@{}}
+\includegraphics[width=0.47\linewidth]{fa2-fig3a-splitk.png} &
+\includegraphics[width=0.47\linewidth]{fa2-fig3b-splitq.png} \\[2pt]
+{\small (a) FlashAttention：切 $K/V$} &
+{\small (b) FlashAttention-2：切 $Q$}
+\end{tabular}
+\fignote{论文 Fig.~3：\facite。蓝：所有 warp 共享；橙：切到不同 warp。}
+\end{center}
+
+\src{kernel/triton/tutorial/06_attention/step04_flash_causal_mha.py}{67}{80}{加速 FA：Q 块并行与 GQA GROUP}
+
+\figgqa
+
+\texttt{llm\_train} 走加速版。先把教学版的数据流搞懂，再看这些并行与 GQA 改动。
+
+\section{RoPE、GQA、MLA}
+
+RoPE 在 \pyfile{step05_rope.py}，按 head dim 旋转。GQA 是 $H_q>H_{kv}$：推理可用 \pyfile{step06_gqa.py} 的前向 \texttt{flash\_attention\_gqa}；训练必须 \texttt{flash\_attention\_gqa\_train}（有图）。MLA 在 \pyfile{step07_mla.py}，教学版吸收仍偏 Host。
+
+\section{怎么跑}
+
+\begin{runcmd}
+\begin{lstlisting}[style=shell]
+python kernel/triton/tutorial/06_attention/step01_naive.py
+python kernel/triton/tutorial/06_attention/step02_mha.py
+python kernel/triton/tutorial/06_attention/step03_flash_single.py
+python kernel/triton/tutorial/06_attention/step04_flash_causal_mha_teach.py
+python kernel/triton/tutorial/06_attention/step04_flash_causal_mha.py
+python kernel/triton/tutorial/06_attention/step05_rope.py
+python kernel/triton/tutorial/06_attention/step06_gqa.py
+\end{lstlisting}
+\end{runcmd}
+
+\section{正确性}
+
+\begin{note}
+fwd 教学默认 fp32，$\mathrm{rtol}=10^{-2}$。\texttt{lse} 是 $(B,H,S)$，不要和 4D 的 $O$ 比 shape。反向 smem 比正向紧：同时驻留 $Q,K,V,O,\mathrm{d}O$ 和 tile 上的 $P,\mathrm{d}S$。$64\times 64\times D$ 在本机曾 \texttt{OutOfResources}，教学反向默认 $32\times 32$。
+\end{note}
+
+\section{效果}
+
+\begin{remark}
+Flash 省的是 HBM 上的 $S/P$，FLOPs 并不更少。墙钟是否赢 SDPA 取决于形状和是否走库函数 Flash。看 launch 次数去做下一章。
+\end{remark}

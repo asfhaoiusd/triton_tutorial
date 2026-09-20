@@ -1,0 +1,69 @@
+\chapter{容易踩的坑}
+
+下面从课上反复出现的问题里抽出仍有效的条目，不按作者进度板逐条抄。
+
+\begin{problemset}[课上反复出现的坑]
+  \item \textbf{归约维}（最后一维）不能随意用 \texttt{program\_id} 切开；要么整行装下，要么 program 内 \texttt{for} 合并统计量。
+  \item Online Softmax / 分块 Norm 往往是为了 $N$ 很大或为 Flash 铺路；单独写出完整 Softmax 时 online 不一定更快。
+  \item Naive 整行 \texttt{BLOCK\_N = next\_power\_of\_2(N)} 在 $N=8192$ 时会寄存器爆炸。
+  \item 对照要公平：TF32、\texttt{synchronize}、warmup。
+  \item \texttt{@triton.jit} 里不能调 Python wrapper；组合算子在 Host 串调用。Host 串多次 launch \textbf{不算} kernel 融合。
+  \item 3D matmul 接多头：$(B,H,S,d)$ 先展成 $(BH,S,d)$。Flash 多头则 \texttt{grid=(B,H)}，基址加 \texttt{stride\_h}。
+  \item \texttt{atomic\_add} + autotune 必须 \texttt{reset\_to\_zero}。
+  \item SDPA $\ne$ 单一 Flash：对照用 \texttt{scaled\_dot\_product\_attention}。
+  \item FA2 是双循环：外 $Q$、内 $K/V$。内层必须 \texttt{for}。
+  \item Launch $=$ 一次 \texttt{kernel[grid](...)}。不要 Python \texttt{for h}。
+  \item Causal 加在 \texttt{qk} 上（\texttt{offs\_n <= offs\_m}），不是 load 的越界 mask。Triton 没有 \texttt{break}。
+  \item Head dim 用 64/128。教学核 $D$ 太大炸 smem（本机上限约 $101376$）。
+  \item 有 \texttt{@triton.autotune} 就不要再传 \texttt{BLOCK\_*}；\texttt{grid} 用 \texttt{lambda meta}。转置是 \texttt{tl.trans} 不是 \texttt{tl.transpose}。
+  \item Triton kernel 不进计算图，必须 \texttt{Function}。\texttt{apply} 才建图。
+  \item \texttt{save\_for\_backward} 只存反向要用的量。Flash 不能存完整 $P$。
+  \item 裸输出没有 \texttt{grad\_fn}。对照用 \texttt{Function.apply} vs SDPA，一次求出 $\mathrm{d}Q,\mathrm{d}K,\mathrm{d}V$。
+  \item \texttt{lse} 是 $(B,H,S)$。\texttt{dQ} atomic 必须从零开始。
+  \item FA 反向 smem 更紧；教学反向 $32\times 32$。显式 launch 记得 \texttt{num\_stages}。
+  \item 跑示例用 \texttt{python path.py}，不要 bash 直接执行没有 shebang 的 \texttt{.py}。
+  \item 教学 GEMM / LN 打不过 cuBLAS：训练默认只换 FA。
+\end{problemset}
+
+\chapter{符号与文件}
+
+\begin{table}[htbp]
+  \centering
+  \caption{符号}
+  \begin{tabular}{ll}
+    \toprule
+    符号 & 含义 \\
+    \midrule
+    $B,H,S,D$ & batch、头数、序列、head dim \\
+    $H_q,H_{kv}$ & GQA 的 Q 头与 KV 头 \\
+    $m,\ell$ / LSE & 在线 softmax 的行最大值与归一化；$\mathrm{LSE}=m+\log\ell$ \\
+    BLOCK\_M/N/K & 输出行块 / 列块 / 归约块 \\
+    program / pid & 一次并行实例，接近 CUDA block \\
+    SM / warp & GPU 上的计算核心；32 线程锁步调度 \\
+    HBM / SRAM & 全局内存 vs SM 上的 shared memory \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+  \centering
+  \caption{仓库入口}
+  \begin{tabular}{ll}
+    \toprule
+    路径 & 内容 \\
+    \midrule
+    \texttt{kernel/triton/tutorial/} & 01--07 算子 \\
+    \texttt{.../step04\_flash\_causal\_mha\_teach.py} & 教学 FA \\
+    \texttt{.../step04\_flash\_causal\_mha.py} & 加速 FA（训练） \\
+    \texttt{projects/qwen35\_infer/} & 推理 generate \\
+    \texttt{projects/llm\_train/} & 训练对照 \\
+    \texttt{docs/textbook/} & 本书 \\
+    \url{https://arxiv.org/abs/2307.08691} & FA2 论文（第~8~章插图出处，勿把 PDF 放进仓库） \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section*{参考文献}
+
+\noindent\facite。\url{\faurl}。
+第~8~章 Fig.~1--3 与 Algorithm~1 直接引自该文，用于对照仓库里的教学 / 加速核。

@@ -1,0 +1,53 @@
+\chapter{用 nsys 看 Launch}
+
+\begin{introduction}
+  \item launch $=$ 一次 \texttt{kernel[grid]}
+  \item 看名字和次数
+  \item 教学 FA 的 $D$ 太大炸 smem
+  \item 脚本：\texttt{run\_nsys.sh}
+\end{introduction}
+
+配套：\pyfile{kernel/triton/tutorial/07_profiling/}。依赖：先做完第~8~章 Flash。本机 \texttt{torch.profiler} 的 CUPTI 常常采不到 GPU，主线是 \texttt{nsys}。\texttt{ncu} 本课不做。
+
+\section{看什么}
+
+一次 \texttt{kernel[grid](...)} 就是一次 launch。多头不要 Python \texttt{for h} 调 $H$ 次。nsys 首先看 \textbf{kernel 名字和次数}，不要只盯总微秒是否赢 SDPA。
+
+\figlaunch
+
+对照三种实现：PyTorch、naive attention、教学 Flash。形状先用默认 $D=64$。教学 Flash 把整段 $D$ 放进 SRAM，$D=512$ 会因 smem 跑不了，那不是 nsys 坏了。
+
+\section{怎么跑}
+
+\begin{runcmd}
+\begin{lstlisting}[style=shell]
+source .venv/bin/activate
+bash kernel/triton/tutorial/07_profiling/run_nsys.sh
+\end{lstlisting}
+\end{runcmd}
+
+或手动：
+
+\begin{runcmd}[手动 nsys]
+\begin{lstlisting}[style=shell]
+cd kernel/triton/tutorial/07_profiling
+nsys profile --stats=true --force-overwrite=true \
+  --trace=cuda,nvtx,osrt \
+  -o nsys_out/flash \
+  python nsys_targets.py --impl flash
+\end{lstlisting}
+\end{runcmd}
+
+\texttt{--impl}：\texttt{torch} / \texttt{naive} / \texttt{flash}。脚本结束会写 \pyfile{nsys_out/compare.md}。
+
+\section{正确性}
+
+\begin{note}
+profiling 不替代数值对照。先保证第~8~章 \texttt{allclose}，再采时间。换形状时三种实现用同一 $B,S,D$。
+\end{note}
+
+\section{效果}
+
+\begin{remark}
+常见结论（以你机器打印为准）：naive 多次 GEMM + softmax，launch 多、中间张量大；Flash 把内层留在一个 kernel。SDPA 可能走完全不同的后端，总时间更短并不矛盾。
+\end{remark}

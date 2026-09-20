@@ -1,0 +1,68 @@
+\chapter{Softmax}
+
+\begin{introduction}
+  \item 归约维不能用 \texttt{pid} 切开
+  \item Naive 整行
+  \item Online：为 Flash 铺路
+  \item 反向 $\mathrm{d}x=y(\mathrm{d}y-\sum y\,\mathrm{d}y)$
+\end{introduction}
+
+配套：\pyfile{kernel/triton/tutorial/04_softmax/}。先跑：\pyfile{step01_naive.py} $\to$ \pyfile{step02_online.py}。选修反向：\pyfile{step90_backward.py}。
+
+\section{公式与数据流}
+
+对最后一维：
+\[
+m=\max_j x_j,\qquad y_j=\frac{e^{x_j-m}}{\sum_k e^{x_k-m}}.
+\]
+
+\begin{proposition}{归约维}
+归约维不能用 \texttt{program\_id} 切开：要么整行装下，要么 program 内 \texttt{for} 分块合并统计量。
+\end{proposition}
+
+\figsoftmax
+
+Naive：一个 program 处理若干行，\texttt{BLOCK\_COLS} 覆盖整行。
+
+\src{kernel/triton/tutorial/04_softmax/step01_naive.py}{46}{75}{Naive 行 Softmax：整行 max / sum}
+
+Online：沿列分块维护可合并的 $(m,d)$，
+\[
+m'=\max(m,m_{\mathrm{blk}}),\quad
+d'=d\,e^{m-m'}+d_{\mathrm{blk}}e^{m_{\mathrm{blk}}-m'}.
+\]
+两趟扫描：先得到全局 $(m,d)$，再写 $y=e^{x-m}/d$。这是为 $N$ 很大，以及后面 Flash 的在线 softmax 做准备。
+
+\figonline
+
+\src{kernel/triton/tutorial/04_softmax/step02_online.py}{50}{77}{Online Softmax：两趟列块}
+
+反向（存 $y$ 不存 $x$）：
+\[
+\mathrm{d}x=y\odot\bigl(\mathrm{d}y-\langle y,\mathrm{d}y\rangle\mathbf{1}\bigr).
+\]
+\texttt{TritonSoftmax.apply} 才建图；裸 \texttt{naive\_softmax} 没有 \texttt{grad\_fn}。
+
+\src{kernel/triton/tutorial/04_softmax/step90_backward.py}{109}{160}{反向闭式与 Function}
+
+\section{怎么跑}
+
+\begin{runcmd}
+\begin{lstlisting}[style=shell]
+python kernel/triton/tutorial/04_softmax/step01_naive.py
+python kernel/triton/tutorial/04_softmax/step02_online.py
+python kernel/triton/tutorial/04_softmax/step90_backward.py
+\end{lstlisting}
+\end{runcmd}
+
+\section{正确性}
+
+\begin{note}
+对 \texttt{F.softmax(..., dim=-1)}；反向 \texttt{autograd.grad}。入门形状最后一维先 $\le 1024$。
+\end{note}
+
+\section{效果}
+
+\begin{remark}
+完整写出 $y$ 时，online \textbf{不一定更快}（多读一遍 $x$）。意义是 $N$ 装不进寄存器，以及给 Flash 准备 $(m,\ell)$ 这类统计量。
+\end{remark}

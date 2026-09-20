@@ -1,0 +1,130 @@
+\chapter{从 AI Infra 到 Triton}
+
+\begin{introduction}
+  \item 训练 / 推理栈怎么分层
+  \item 算子改的是 HBM 与 launch
+  \item GPU：HBM / SM / warp
+  \item CUDA：grid / block / thread
+  \item Triton 在 CUDA 上抬了一层
+  \item Triton 不替代 cuBLAS
+\end{introduction}
+
+写 kernel 之前，先看它落在训练/推理栈的哪一层，以及 GPU / CUDA 把并行切成哪几级。这一章几乎没有代码：把硬件、CUDA 的位置和 Triton 收掉了哪些细节说清楚，下一章再写 \texttt{pid} 与 \texttt{mask}。
+
+\section{AI Infra 是什么}
+
+大模型能跑起来，靠的不只是「Transformer 公式」。从用户请求到 GPU 上的一条指令，中间至少叠了这些层：
+
+\begin{enumerate}
+  \item \textbf{框架}：PyTorch 描述计算图、自动微分、混合精度。
+  \item \textbf{编译器}：\texttt{torch.compile} / Inductor 把图收成更少的 kernel。
+  \item \textbf{算子库}：cuBLAS、cuDNN、FlashAttention 等，把 GEMM、卷积、注意力做成高度特化的实现。
+  \item \textbf{运行时与调度}：vLLM 这类系统做 PagedAttention、continuous batching、CUDA Graph，决定\textbf{何时}launch、launch \textbf{哪一批}请求。
+  \item \textbf{硬件}：HBM、SRAM、Tensor Core、SM 数量。同一套公式，访存路径不同，墙钟差一个数量级并不罕见。
+\end{enumerate}
+
+\begin{proposition}{本仓库落在哪}
+我们写的是第 3 层附近：\textbf{自己实现若干算子}，并接到一条 generate 和若干步训练上。不是造一个迷你 vLLM，也不追求端到端打败库函数。
+\end{proposition}
+
+\section{算子为什么重要}
+
+同一套 Llama / Qwen 式结构里，时间往往耗在三类事情上：
+
+\begin{itemize}
+  \item 大矩阵乘（线性层、SwiGLU 的 gate/up/down）；
+  \item 归一化（LayerNorm / RMSNorm）；
+  \item 注意力（$QK^\top$、softmax、$PV$，以及 causal / GQA 变体）。
+\end{itemize}
+
+换核改变的是这一层的 \textbf{HBM 往返、片上 SRAM、launch 次数}，不是模型公式本身。
+
+\figmemhier
+
+教学核如果比 cuBLAS 慢，通常是 GEMM 形状已经够大、库函数吃满了 Tensor Core；这不说明「不该学分块」，只说明\textbf{对照对象要选对}。
+
+\section{GPU 长什么样}
+
+NVIDIA GPU 可以先看成两层：外面一份大而慢的内存，里面许多能并行干活的小核心。
+
+\figgpuhier
+
+\begin{itemize}
+  \item \textbf{HBM}（全局内存）：容量大（十几到几十 GB），带宽相对片上仍慢。$Q,K,V,O$ 以及中间的 $S,P$ 默认住这里。
+  \item \textbf{L2}：全芯片共享的缓存，课上不用手管。
+  \item \textbf{SM}（Streaming Multiprocessor）：真正算的地方。每个 SM 有自己的 \textbf{shared memory}（SRAM，大约一百 KB 量级）、寄存器和 Tensor Core。一个 CUDA \textbf{block} 调度到其中一个 SM，块内线程才能共用这份 SRAM。
+  \item \textbf{warp}：硬件调度单位，\textbf{32 条线程锁步}（SIMT）。Tensor Core 吃的是 warp 级的矩阵乘；一条线程跑到 \texttt{if}、另一条没跑到，就是 warp divergence。
+\end{itemize}
+
+\begin{proposition}{和算子的关系}
+Flash 把 $S,P$ 留在 SRAM，是因为 HBM 往返比多算几次 softmax 统计量更贵。教学核 $D=512$ 跑不了，是因为这一份 tile 超过了单 SM 的 shared memory，不是公式错了。
+\end{proposition}
+
+\section{CUDA 的编程模型}
+
+CUDA 把上面的硬件收成 Host 能启动的三级并行：
+
+\figcudagrid
+
+\begin{itemize}
+  \item \textbf{grid}：一次 launch 的全部工作。Host 写 \texttt{kernel<<<grid, block>>>}。
+  \item \textbf{block}：一份驻留在某个 SM 上的线程组，共享 SRAM，用 \texttt{\_\_syncthreads} 对齐。
+  \item \textbf{thread}：你写的那一层。地址通常是 \texttt{blockIdx * blockDim + threadIdx}。
+\end{itemize}
+
+CUDA C++ 仍然是 NVIDIA GPU 上性能的底盘：warp、shared memory、occupancy、异步拷贝都可以直接管；cuBLAS / 官方 Flash 最终也是这一层。缺点是入门必须同时处理 thread 索引、同步、bank conflict 和 divergence。本课不写 CUDA C++，但后面的 \texttt{pid}、\texttt{BLOCK}、\texttt{num\_warps} 都是对着这张图说的。
+
+\section{Triton 在 CUDA 上做了哪些抽象}
+
+Triton 编译器的后端仍是 CUDA（PTX / cubin，同一套驱动）。它抬高的是\textbf{你要写到哪一层}。
+
+\figtritonabs
+
+\noindent\begin{minipage}{\linewidth}
+\centering\small
+\captionof{table}{Triton 收掉了什么、留下了什么}
+\begin{tabular}{lll}
+  \toprule
+  & CUDA C++ & Triton \\
+  \midrule
+  并行单元 & thread / warp & program $\approx$ block \\
+  区分实例 & \texttt{threadIdx} / \texttt{blockIdx} & \texttt{tl.program\_id} \\
+  切一块数据 & 用线程号算偏移 & \texttt{BLOCK}+\texttt{arange}+\texttt{mask} \\
+  块内同步 / SRAM & \texttt{\_\_shared\_\_}、\texttt{\_\_syncthreads} & 编译器插入 \\
+  喂 Tensor Core & 自己排 warp / MMA & \texttt{tl.dot} \\
+  几个 warp & \texttt{blockDim} & \texttt{num\_warps}（常 autotune） \\
+  异步拷贝 & 自己写 & \texttt{num\_stages} \\
+  启动 & \texttt{<<<grid,block>>>} & \texttt{kernel[grid](...)} \\
+  \bottomrule
+\end{tabular}
+\end{minipage}
+
+\begin{definition}{收掉 thread，不收掉分块}
+Triton \textbf{不}替你决定哪一维用 pid、哪一维核内 \texttt{for}，也不替你决定中间结果住 HBM 还是 SRAM。融合、causal、GQA、launch 次数仍然是数据流问题。它收掉的是「第 $t$ 号线程怎么对齐、这块 tile 怎么摊到 4 个 warp 上」。
+\end{definition}
+
+所以：会 Triton 不是「不用懂 GPU」。HBM / SM / warp 这张骨架还在；只是你从 tile 往下看，不再从 thread 往上看。
+
+\begin{definition}{Triton 不替代 CUDA}
+教学核常常慢于 cuBLAS 和 SDPA。该调库函数的地方（大 GEMM、官方 Flash）课上仍调库。Triton 的价值是：\textbf{用可改的数据流把融合、causal、GQA、反向讲清楚}，并在需要时替换个别算子。
+\end{definition}
+
+对照如下。
+
+\noindent\begin{minipage}{\linewidth}
+\centering
+\captionof{table}{三种写法各自管到哪一层}
+\begin{tabular}{llll}
+  \toprule
+  & PyTorch eager & Triton & CUDA C++ \\
+  \midrule
+  并行单元 & 算子调用 & program / 块 & thread / warp \\
+  典型作者 & 模型代码 & 算子数据流 & 硬件细节 \\
+  和 autograd & 自动 & 需 \texttt{Function} & 需 \texttt{Function} + 更多样板 \\
+  性能上限 & 依赖后端选择 & 中高（看形状） & 最高 \\
+  本课用法 & 对照基线 & 主体 & 不写 \\
+  \bottomrule
+\end{tabular}
+\end{minipage}
+
+下一章从最小的向量加法开始，把 \texttt{pid}、\texttt{BLOCK}、\texttt{mask}、stride 写成可跑的套路。
